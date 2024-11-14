@@ -1,6 +1,7 @@
 XyrisPack is a small proof-of-concept packer written in MASM 
 
-![image](https://github.com/user-attachments/assets/05290976-0b22-4f07-babb-90ff1608f49f)
+![image](https://github.com/user-attachments/assets/aa92daf3-cf22-4c4f-a3bc-552940064484)
+
 ```
 ┌─────────────────────────────────┐
 │ Builder Process                 │
