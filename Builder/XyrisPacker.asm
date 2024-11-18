@@ -196,6 +196,7 @@ add_section PROC target_file:DWORD
     mov file_size, eax
     
     mov eax, input_size
+    add eax, 1000h
     add eax, file_size
     mov aligned_size, eax
     
@@ -284,7 +285,7 @@ add_section PROC target_file:DWORD
     
     mov edx, new_section
     mov eax, IMAGE_SCN_MEM_READ or IMAGE_SCN_MEM_WRITE or IMAGE_SCN_CNT_INITIALIZED_DATA 
-    mov [edx + 24h], eax
+    mov [edx + 24h], eax      ; Characteristics
     
     mov cx, word ptr [ebx + 6]
     inc cx
@@ -308,7 +309,15 @@ add_section PROC target_file:DWORD
     mov ecx, input_size
     rep movsb
      
-
+   mov eax, input_size
+    xor edx, edx
+    div file_align           
+    .if edx != 0            
+        mov ecx, file_align
+        sub ecx, edx         
+        xor al, al
+        rep stosb            
+    .endif
    
     invoke FlushViewOfFile, pMapping, 0
     invoke UnmapViewOfFile, pMapping
@@ -318,6 +327,7 @@ add_section PROC target_file:DWORD
     mov eax, 1
     ret
 add_section ENDP
+
 strlen PROC string:DWORD
     LOCAL len:DWORD
     mov len, 0
@@ -763,7 +773,7 @@ DlgProc PROC hWin:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 
 DlgProc ENDP
 
-_Quit PROC
+_Quit proc
    invoke _WaveFree, addr stWaveObj
    invoke DestroyWindow, hWnd
    invoke PostQuitMessage, NULL
